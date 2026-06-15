@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Cosmic Web Visualization API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: cosmos
+    description: Cosmological data endpoints
 paths:
   /healthz:
     get:
@@ -24,6 +26,81 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /galaxies:
+    get:
+      operationId: getGalaxies
+      tags: [cosmos]
+      summary: Get galaxy data
+      description: Returns spatially sampled galaxy positions and metadata
+      parameters:
+        - name: sample
+          in: query
+          schema:
+            type: integer
+            default: 80000
+          description: Max number of galaxies to return
+        - name: zmin
+          in: query
+          schema:
+            type: number
+            default: 0.0
+          description: Minimum redshift
+        - name: zmax
+          in: query
+          schema:
+            type: number
+            default: 1.2
+          description: Maximum redshift
+        - name: dataset
+          in: query
+          schema:
+            type: string
+            default: all
+          description: Dataset filter (all, lrg60, lrg70, lrg80, lrg90, lrg100, lrg2)
+      responses:
+        "200":
+          description: Galaxy data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GalaxyResponse"
+
+  /galaxies/stats:
+    get:
+      operationId: getGalaxyStats
+      tags: [cosmos]
+      summary: Get dataset statistics
+      description: Returns counts and metadata about available galaxy datasets
+      responses:
+        "200":
+          description: Dataset statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GalaxyStats"
+
+  /density-grid:
+    get:
+      operationId: getDensityGrid
+      tags: [cosmos]
+      summary: Get density grid
+      description: Returns a precomputed 3D density grid for the flow overlay
+      parameters:
+        - name: resolution
+          in: query
+          schema:
+            type: integer
+            default: 32
+          description: Grid resolution per axis
+      responses:
+        "200":
+          description: Density grid data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DensityGrid"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +111,175 @@ components:
       required:
         - status
 
+    Galaxy:
+      type: object
+      properties:
+        x:
+          type: number
+          description: Cartesian X position in Mpc (Earth at origin)
+        y:
+          type: number
+          description: Cartesian Y position in Mpc
+        z:
+          type: number
+          description: Cartesian Z position in Mpc
+        ra:
+          type: number
+          description: Right ascension in degrees
+        dec:
+          type: number
+          description: Declination in degrees
+        redshift:
+          type: number
+          description: Spectroscopic redshift
+        distance:
+          type: number
+          description: Comoving distance in Mpc
+        density:
+          type: number
+          description: Local density contrast (delta = rho/rho_mean - 1)
+        dataset:
+          type: string
+          description: Source dataset label
+      required:
+        - x
+        - y
+        - z
+        - ra
+        - dec
+        - redshift
+        - distance
+        - density
+        - dataset
+
+    GalaxyResponse:
+      type: object
+      properties:
+        galaxies:
+          type: array
+          items:
+            $ref: "#/components/schemas/Galaxy"
+        total:
+          type: integer
+          description: Total galaxies in filtered set
+        returned:
+          type: integer
+          description: Number of galaxies returned
+        cosmology:
+          $ref: "#/components/schemas/Cosmology"
+      required:
+        - galaxies
+        - total
+        - returned
+        - cosmology
+
+    Cosmology:
+      type: object
+      properties:
+        H0:
+          type: number
+          description: Hubble constant km/s/Mpc
+        OmegaM:
+          type: number
+          description: Matter density parameter
+        OmegaL:
+          type: number
+          description: Dark energy density parameter
+      required:
+        - H0
+        - OmegaM
+        - OmegaL
+
+    GalaxyStats:
+      type: object
+      properties:
+        datasets:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetInfo"
+        totalGalaxies:
+          type: integer
+        zRange:
+          type: object
+          properties:
+            min:
+              type: number
+            max:
+              type: number
+          required:
+            - min
+            - max
+      required:
+        - datasets
+        - totalGalaxies
+        - zRange
+
+    DatasetInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+        zMin:
+          type: number
+        zMax:
+          type: number
+        label:
+          type: string
+      required:
+        - name
+        - count
+        - zMin
+        - zMax
+        - label
+
+    DensityCell:
+      type: object
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+        z:
+          type: number
+        density:
+          type: number
+        vx:
+          type: number
+        vy:
+          type: number
+        vz:
+          type: number
+      required:
+        - x
+        - y
+        - z
+        - density
+        - vx
+        - vy
+        - vz
+
+    DensityGrid:
+      type: object
+      properties:
+        cells:
+          type: array
+          items:
+            $ref: "#/components/schemas/DensityCell"
+        resolution:
+          type: integer
+        bounds:
+          type: object
+          properties:
+            min:
+              type: number
+            max:
+              type: number
+          required:
+            - min
+            - max
+      required:
+        - cells
+        - resolution
+        - bounds

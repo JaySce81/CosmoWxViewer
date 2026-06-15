@@ -1,0 +1,2 @@
+- [Cosmic Web stack](cosmic-web-stack.md) — no DB; 3M galaxies in memory from CSV; WebGL pre-detect before Canvas mount
+- [Array spread stack overflow](array-spread-stackoverflow.md) — push(...largeArray) blows stack at 500k elements; use for loop
