@@ -6,58 +6,65 @@ interface Props {
 }
 
 export function ScaleGrid({ SCALE }: Props) {
-  // Concentric shells at 500, 1000, 1500, 2000, 2500, 3000 Mpc
   const shellMpc = [500, 1000, 1500, 2000, 2500, 3000];
 
-  // Radial spokes
-  const spokes = useMemo(() => {
-    const lines: THREE.Vector3[][] = [];
-    // 12 radial lines from origin outward in equatorial plane
+  // Build all geometry objects in useMemo — avoids new objects every frame
+  const { spokePrimitives, equatorMesh } = useMemo(() => {
+    const spokeMat = new THREE.LineBasicMaterial({ color: "#0a1a3a", transparent: true, opacity: 0.2 });
+    const prims: THREE.Line[] = [];
+
+    // 12 equatorial spokes
     for (let i = 0; i < 12; i++) {
       const angle = (i / 12) * Math.PI * 2;
       const r = 3200 * SCALE;
-      lines.push([
+      const pts = [
         new THREE.Vector3(0, 0, 0),
         new THREE.Vector3(r * Math.cos(angle), 0, r * Math.sin(angle)),
-      ]);
+      ];
+      prims.push(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), spokeMat));
     }
-    // Also 3 polar spokes
-    lines.push([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 3200 * SCALE, 0)]);
-    lines.push([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -3200 * SCALE, 0)]);
-    return lines;
+
+    // 2 polar spokes
+    const poleR = 3200 * SCALE;
+    const poleMat = new THREE.LineBasicMaterial({ color: "#0a1a4a", transparent: true, opacity: 0.15 });
+    prims.push(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, poleR, 0)]),
+      poleMat
+    ));
+    prims.push(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -poleR, 0)]),
+      poleMat
+    ));
+
+    return { spokePrimitives: prims, equatorMesh: null };
   }, [SCALE]);
 
   return (
     <group>
       {/* Concentric shell wireframes */}
-      {shellMpc.map((mpc) => (
+      {shellMpc.map((mpc, i) => (
         <mesh key={mpc}>
           <sphereGeometry args={[mpc * SCALE, 32, 24]} />
           <meshBasicMaterial
-            color="#1a2a4a"
+            color={i === 0 ? "#1a3050" : "#0d1a30"}
             wireframe
             transparent
-            opacity={0.08}
+            opacity={i === 0 ? 0.12 : 0.06}
             side={THREE.DoubleSide}
           />
         </mesh>
       ))}
 
-      {/* Equatorial reference ring */}
+      {/* Equatorial ring */}
       <mesh rotation={[Math.PI / 2, 0, 0]}>
         <ringGeometry args={[3190 * SCALE, 3200 * SCALE, 128]} />
-        <meshBasicMaterial color="#1a3a6a" transparent opacity={0.15} side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#1a3a6a" transparent opacity={0.18} side={THREE.DoubleSide} />
       </mesh>
 
-      {/* Radial spokes */}
-      {spokes.map((pts, i) => {
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        return (
-          <line key={i} geometry={geo}>
-            <lineBasicMaterial color="#0a1a3a" transparent opacity={0.2} />
-          </line>
-        );
-      })}
+      {/* Radial spokes — primitive avoids JSX <line> vs HTML/SVG <line> ambiguity */}
+      {spokePrimitives.map((obj, i) => (
+        <primitive key={i} object={obj} />
+      ))}
     </group>
   );
 }

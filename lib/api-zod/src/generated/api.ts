@@ -71,7 +71,8 @@ export const GetGalaxyStatsResponse = zod.object({
   "zRange": zod.object({
   "min": zod.number(),
   "max": zod.number()
-})
+}),
+  "ready": zod.boolean().describe('Whether the server has finished loading all galaxy data')
 })
 
 

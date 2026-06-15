@@ -209,10 +209,14 @@ components:
           required:
             - min
             - max
+        ready:
+          type: boolean
+          description: Whether the server has finished loading all galaxy data
       required:
         - datasets
         - totalGalaxies
         - zRange
+        - ready
 
     DatasetInfo:
       type: object

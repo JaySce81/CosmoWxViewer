@@ -12,4 +12,6 @@ export interface GalaxyStats {
   datasets: DatasetInfo[];
   totalGalaxies: number;
   zRange: GalaxyStatsZRange;
+  /** Whether the server has finished loading all galaxy data */
+  ready: boolean;
 }

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -16,47 +16,50 @@ export function EarthMarker() {
     }
   });
 
+  // Create spoke geometries once, not every render
+  const spokeGeos = useMemo(() => {
+    return [0, 60, 120, 180, 240, 300].map((angle) => {
+      const rad = (angle * Math.PI) / 180;
+      const pts = [
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0.055 * Math.cos(rad), 0.055 * Math.sin(rad), 0),
+      ];
+      return new THREE.BufferGeometry().setFromPoints(pts);
+    });
+  }, []);
+
+  const spokeMaterial = useMemo(
+    () => new THREE.LineBasicMaterial({ color: "#4da6ff", transparent: true, opacity: 0.3 }),
+    []
+  );
+
   return (
     <group position={[0, 0, 0]}>
-      {/* Core - Earth */}
+      {/* Core — Earth */}
       <mesh>
         <sphereGeometry args={[0.012, 32, 32]} />
-        <meshPhongMaterial color="#1a6bff" emissive="#0033aa" emissiveIntensity={0.8} />
+        <meshPhongMaterial color="#1a6bff" emissive="#003399" emissiveIntensity={1.0} />
       </mesh>
 
       {/* Atmosphere glow */}
       <mesh ref={glowRef}>
-        <sphereGeometry args={[0.022, 32, 32]} />
-        <meshPhongMaterial
-          color="#4da6ff"
-          transparent
-          opacity={0.18}
-          side={THREE.BackSide}
-        />
+        <sphereGeometry args={[0.024, 32, 32]} />
+        <meshPhongMaterial color="#4da6ff" transparent opacity={0.15} side={THREE.BackSide} />
       </mesh>
 
-      {/* Orbit ring */}
+      {/* Equatorial ring */}
       <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.032, 0.035, 64]} />
-        <meshBasicMaterial color="#4da6ff" transparent opacity={0.4} side={THREE.DoubleSide} />
+        <ringGeometry args={[0.030, 0.033, 64]} />
+        <meshBasicMaterial color="#4da6ff" transparent opacity={0.5} side={THREE.DoubleSide} />
       </mesh>
 
-      {/* "Origin" label via radial lines */}
-      {[0, 60, 120, 180, 240, 300].map((angle) => {
-        const rad = (angle * Math.PI) / 180;
-        const x2 = 0.055 * Math.cos(rad);
-        const y2 = 0.055 * Math.sin(rad);
-        const pts = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(x2, y2, 0)];
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        return (
-          <line key={angle} geometry={geo}>
-            <lineBasicMaterial color="#4da6ff" transparent opacity={0.3} />
-          </line>
-        );
-      })}
+      {/* Radial spokes — use primitive to avoid JSX <line> vs HTML <line> ambiguity */}
+      {spokeGeos.map((geo, i) => (
+        <primitive key={i} object={new THREE.Line(geo, spokeMaterial)} />
+      ))}
 
-      {/* Point light to illuminate nearby scene */}
-      <pointLight color="#2266ff" intensity={0.5} distance={0.5} />
+      {/* Local point light */}
+      <pointLight color="#2266ff" intensity={0.6} distance={0.6} />
     </group>
   );
 }

@@ -25,6 +25,7 @@ interface Props {
   totalGalaxies: number;
   loadedGalaxies: number;
   isLoading: boolean;
+  serverReady: boolean;
   datasetFilter: string;
   onDatasetFilter: (d: string) => void;
   stats?: {
@@ -46,7 +47,7 @@ const LAYER_CONFIG: Array<{ key: keyof Layers; label: string; icon: string; colo
 export function ControlPanel({
   layers, onLayerToggle, colorMode, onColorMode, pointSize, onPointSize,
   isPlaying, onPlayToggle, playSpeed, onPlaySpeed, futureOffset, onFutureOffset,
-  totalGalaxies, loadedGalaxies, isLoading, datasetFilter, onDatasetFilter, stats,
+  totalGalaxies, loadedGalaxies, isLoading, serverReady, datasetFilter, onDatasetFilter, stats,
 }: Props) {
   return (
     <div
