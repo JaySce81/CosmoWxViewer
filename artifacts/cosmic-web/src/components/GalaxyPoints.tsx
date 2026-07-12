@@ -1,26 +1,32 @@
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { extend } from "@react-three/fiber";
 import { densityToColor } from "../lib/cosmicColors";
 
-// Flow grid constants must match backend (FLOW_RES=16, BOUNDS=3600)
-const FLOW_BOUNDS = 3600; // Mpc
+extend({ Points: THREE.Points, BufferGeometry: THREE.BufferGeometry });
+
+// Flow grid constants must match backend: FLOW_RES=16, BOUNDS=3600 Mpc
+const FLOW_BOUNDS = 3600;
 const FLOW_RES = 16;
 const FLOW_CELL_SIZE = (FLOW_BOUNDS * 2) / FLOW_RES; // 450 Mpc
 
-interface Galaxy {
+export interface Galaxy {
   x: number; y: number; z: number;  // Cartesian Mpc
+  ra: number; dec: number;             // degrees
   density: number;
   redshift: number;
+  distance: number;
   dataset: string;
 }
 
 interface Props {
   galaxies: Galaxy[];
   colorMode: "density" | "redshift" | "dataset";
-  pointSize: number;        // final world-unit size (e.g. 0.003)
-  futureOffset: number;     // fractional Gyr offset (0 = now)
+  pointSize: number;        // world units (e.g. 0.0036)
+  futureOffset: number;     // Gyr offset (0 = now)
   densityGrid?: { cells: Array<{x:number,y:number,z:number,vx:number,vy:number,vz:number,density:number}> };
-  SCALE: number;            // Mpc → world units (1/1000)
+  SCALE: number;
+  onClick?: (galaxy: Galaxy) => void;  // click handler
 }
 
 const DATASET_RGB: Record<string, [number,number,number]> = {
@@ -32,7 +38,6 @@ const DATASET_RGB: Record<string, [number,number,number]> = {
   lrg2:   [0.88, 0.50, 1.00],
 };
 
-// Build integer-keyed velocity grid for O(1) cell lookup
 function buildVelGrid(cells: NonNullable<Props["densityGrid"]>["cells"]) {
   const grid = new Map<number, [number, number, number]>();
   for (const cell of cells) {
@@ -51,7 +56,7 @@ function galaxyCellKey(gx: number, gy: number, gz: number): number {
   return fi * FLOW_RES * FLOW_RES + fj * FLOW_RES + fk;
 }
 
-export function GalaxyPoints({ galaxies, colorMode, pointSize, futureOffset, densityGrid, SCALE }: Props) {
+export function GalaxyPoints({ galaxies, colorMode, pointSize, futureOffset, densityGrid, SCALE, onClick }: Props) {
   const meshRef = useRef<THREE.Points>(null);
 
   const { positions, colors } = useMemo(() => {
@@ -59,29 +64,37 @@ export function GalaxyPoints({ galaxies, colorMode, pointSize, futureOffset, den
     const pos = new Float32Array(N * 3);
     const col = new Float32Array(N * 3);
 
-    // Pre-build velocity lookup for futurecast
-    const velGrid = densityGrid && futureOffset > 0
-      ? buildVelGrid(densityGrid.cells)
-      : null;
+    const velGrid = densityGrid && futureOffset > 0 ? buildVelGrid(densityGrid.cells) : null;
 
-    // Physical displacement per Gyr futurecast: δv ≈ gradient-velocity × scale
-    // ~150 Mpc/Gyr is an upper-bound for large-scale flow
-    const DISP_SCALE = 150; // Mpc per unit futureOffset per unit velocity
+    // Futurecast displacement scaling:
+    // ∆x = H₀⁻¹ f(Ωₘ) × v_field × ∆t, where f(Ωₘ)≈Ωₘ^0.545≈0.55 for Ωₘ=0.3
+    // Velocity field is a density gradient (dimensionless), so the displacement in Mpc/Gyr
+    // is: ∆x [Mpc] = (c/H₀) × ∇δ × f × ∆t [Gyr], but to keep it visually interpretable
+    // and bounded, we scale by a constant that represents ~1000 km/s flow on 1 Gyr ≈ 1 Mpc
+    // More precisely: v_rec [km/s] = H₀ × f × δ × D(z) / (1+z), but our field is just ∇δ.
+    // For display: use a scaling factor of 60 Mpc per unit Gyr × gradient magnitude.
+    // This is physically illustrative: a typical cosmic flow of 300 km/s over 1 Gyr
+    // moves a galaxy ~0.3 Mpc. With our gradient magnitudes of ~0.05-0.2,
+    // displacement ~ (0.05-0.2) × 60 = 3-12 Mpc per Gyr — visually correct.
+    const DISP_SCALE = 60; // Mpc per Gyr per unit gradient (illustrative)
 
     for (let i = 0; i < N; i++) {
       const g = galaxies[i];
       let gx = g.x, gy = g.y, gz = g.z;
 
-      // Futurecast: displace along flow-field vector
       if (velGrid && futureOffset > 0) {
         const key = galaxyCellKey(gx, gy, gz);
         const vel = velGrid.get(key);
         if (vel) {
-          // Normalize so max displacement ≈ DISP_SCALE * futureOffset Mpc
-          const mag = Math.sqrt(vel[0]*vel[0] + vel[1]*vel[1] + vel[2]*vel[2]) || 1;
-          gx += (vel[0] / mag) * futureOffset * DISP_SCALE;
-          gy += (vel[1] / mag) * futureOffset * DISP_SCALE;
-          gz += (vel[2] / mag) * futureOffset * DISP_SCALE;
+          const mag = Math.sqrt(vel[0]*vel[0] + vel[1]*vel[1] + vel[2]*vel[2]);
+          // Displacement ∝ gradient magnitude × futureOffset (scientifically valid:
+          // larger gradients = stronger flows = more displacement)
+          const disp = (mag || 0) * futureOffset * DISP_SCALE;
+          if (disp > 0 && mag > 0) {
+            gx += (vel[0] / mag) * disp;
+            gy += (vel[1] / mag) * disp;
+            gz += (vel[2] / mag) * disp;
+          }
         }
       }
 
@@ -89,12 +102,10 @@ export function GalaxyPoints({ galaxies, colorMode, pointSize, futureOffset, den
       pos[i * 3 + 1] = gy * SCALE;
       pos[i * 3 + 2] = gz * SCALE;
 
-      // Color by mode
       let r = 1, g2 = 1, b = 1;
       if (colorMode === "density") {
         const c = densityToColor(g.density);
         r = c.r; g2 = c.g; b = c.b;
-        // Dim void galaxies slightly so structure pops
         const dim = g.density < 0 ? 0.55 + 0.45 * ((g.density + 1) / 1) : 1;
         r *= dim; g2 *= dim; b *= dim;
       } else if (colorMode === "redshift") {
@@ -122,8 +133,19 @@ export function GalaxyPoints({ galaxies, colorMode, pointSize, futureOffset, den
     return geo;
   }, [positions, colors]);
 
+  // Click handler using raycaster against the points geometry
+  const handleClick = (event: THREE.Event) => {
+    if (!onClick || !meshRef.current) return;
+    const e = event as unknown as { intersections?: Array<{ index?: number }> };
+    const intersections = e.intersections;
+    if (!intersections || intersections.length === 0) return;
+    const idx = intersections[0].index;
+    if (idx == null || idx < 0 || idx >= galaxies.length) return;
+    onClick(galaxies[idx]);
+  };
+
   return (
-    <points ref={meshRef} geometry={geometry}>
+    <points ref={meshRef} geometry={geometry} onClick={handleClick}>
       <pointsMaterial
         size={pointSize}
         vertexColors

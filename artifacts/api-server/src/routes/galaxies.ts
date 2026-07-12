@@ -84,6 +84,9 @@ interface DensityGridResult {
 }
 let densityGridCache: DensityGridResult | null = null;
 
+// Flow grid constants used by both density builder and cluster endpoint
+const FLOW_RES = 16; // coarse grid resolution
+
 // ─── CSV Parsing ──────────────────────────────────────────────────────────────
 async function parseCSV(filePath: string, datasetName: string): Promise<GalaxyRaw[]> {
   return new Promise((resolve, reject) => {
@@ -182,8 +185,7 @@ function buildDensityAndAnnotate(allGalaxies: GalaxyRaw[]): DensityGridResult {
     g.density = counts[idx3(ix, iy, iz)] / meanCount - 1;
   }
 
-  // Build coarser 16³ flow-field grid via density gradient
-  const FLOW_RES = 16;
+  // Build coarser flow-field grid via density gradient
   const flowStep = GRID_RES / FLOW_RES;
   const cells: FlowCell[] = [];
 
@@ -341,6 +343,32 @@ router.get("/density-grid", (_req, res) => {
     return;
   }
   res.json(densityGridCache);
+});
+
+// GET /api/clusters — top-N overdense regions from the flow field
+router.get("/clusters", (req, res) => {
+  if (!storeReady || !densityGridCache) {
+    res.status(503).json({ error: "Data not ready" });
+    return;
+  }
+  const n = Math.min(parseInt(String(req.query.n ?? "20"), 10), 100);
+  // Sort by density descending and take top N
+  const sorted = [...densityGridCache.cells].sort((a, b) => b.density - a.density);
+  const top = sorted.slice(0, n);
+
+  res.json({
+    clusters: top.map(c => ({
+      x: c.x, y: c.y, z: c.z,
+      density: c.density,
+      vx: c.vx, vy: c.vy, vz: c.vz,
+      // Estimate galaxy count in this cell: density tells us n/n_mean. Mean galaxies
+      // per 450 Mpc cell = totalLoaded / (16^3) ≈ 3000000 / 4096 ≈ 732.
+      // n = n_mean × (1 + δ), so estimated count ≈ 732 × (1 + δ)
+      estimatedCount: Math.round((totalLoaded / (FLOW_RES * FLOW_RES * FLOW_RES)) * (1 + c.density)),
+    })),
+    totalCells: densityGridCache.cells.length,
+    returned: top.length,
+  });
 });
 
 export default router;

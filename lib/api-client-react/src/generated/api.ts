@@ -16,9 +16,11 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  ClusterResponse,
   DensityGrid,
   GalaxyResponse,
   GalaxyStats,
+  GetClustersParams,
   GetDensityGridParams,
   GetGalaxiesParams,
   HealthStatus
@@ -350,6 +352,91 @@ export function useGetDensityGrid<TData = Awaited<ReturnType<typeof getDensityGr
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetDensityGridQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetClustersUrl = (params?: GetClustersParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/clusters?${stringifiedParams}` : `/api/clusters`
+}
+
+/**
+ * Returns the most overdense regions from the density grid, sorted by density contrast
+ * @summary Get top overdense regions
+ */
+export const getClusters = async (params?: GetClustersParams, options?: RequestInit): Promise<ClusterResponse> => {
+
+  return customFetch<ClusterResponse>(getGetClustersUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetClustersQueryKey = (params?: GetClustersParams,) => {
+    return [
+    `/api/clusters`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetClustersQueryOptions = <TData = Awaited<ReturnType<typeof getClusters>>, TError = ErrorType<unknown>>(params?: GetClustersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getClusters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetClustersQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getClusters>>> = ({ signal }) => getClusters(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getClusters>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetClustersQueryResult = NonNullable<Awaited<ReturnType<typeof getClusters>>>
+export type GetClustersQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get top overdense regions
+ */
+
+export function useGetClusters<TData = Awaited<ReturnType<typeof getClusters>>, TError = ErrorType<unknown>>(
+ params?: GetClustersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getClusters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetClustersQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

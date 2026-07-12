@@ -90,6 +90,28 @@ export interface DensityGrid {
   bounds: DensityGridBounds;
 }
 
+export interface Cluster {
+  /** Cell center X in Mpc */
+  x: number;
+  /** Cell center Y in Mpc */
+  y: number;
+  /** Cell center Z in Mpc */
+  z: number;
+  /** Density contrast delta at this cell */
+  density: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  /** Estimated galaxy count in this 450 Mpc cell */
+  estimatedCount: number;
+}
+
+export interface ClusterResponse {
+  clusters: Cluster[];
+  totalCells: number;
+  returned: number;
+}
+
 export type GetGalaxiesParams = {
 /**
  * Max number of galaxies to return
@@ -114,5 +136,12 @@ export type GetDensityGridParams = {
  * Grid resolution per axis
  */
 resolution?: number;
+};
+
+export type GetClustersParams = {
+/**
+ * Number of top clusters to return
+ */
+n?: number;
 };
 

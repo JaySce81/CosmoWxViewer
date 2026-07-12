@@ -101,6 +101,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/DensityGrid"
 
+  /clusters:
+    get:
+      operationId: getClusters
+      tags: [cosmos]
+      summary: Get top overdense regions
+      description: Returns the most overdense regions from the density grid, sorted by density contrast
+      parameters:
+        - name: n
+          in: query
+          schema:
+            type: integer
+            default: 20
+          description: Number of top clusters to return
+      responses:
+        "200":
+          description: Cluster data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -287,3 +308,53 @@ components:
         - cells
         - resolution
         - bounds
+
+    Cluster:
+      type: object
+      properties:
+        x:
+          type: number
+          description: Cell center X in Mpc
+        y:
+          type: number
+          description: Cell center Y in Mpc
+        z:
+          type: number
+          description: Cell center Z in Mpc
+        density:
+          type: number
+          description: Density contrast delta at this cell
+        vx:
+          type: number
+        vy:
+          type: number
+        vz:
+          type: number
+        estimatedCount:
+          type: integer
+          description: Estimated galaxy count in this 450 Mpc cell
+      required:
+        - x
+        - y
+        - z
+        - density
+        - vx
+        - vy
+        - vz
+        - estimatedCount
+
+    ClusterResponse:
+      type: object
+      properties:
+        clusters:
+          type: array
+          items:
+            $ref: "#/components/schemas/Cluster"
+        totalCells:
+          type: integer
+        returned:
+          type: integer
+      required:
+        - clusters
+        - totalCells
+        - returned

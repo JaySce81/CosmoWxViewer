@@ -1,13 +1,14 @@
-import { useRef, Suspense, useMemo } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { useRef, Suspense, useMemo, useCallback, useEffect } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Stars } from "@react-three/drei";
 import * as THREE from "three";
-import { GalaxyPoints } from "./GalaxyPoints";
+import { GalaxyPoints, type Galaxy } from "./GalaxyPoints";
 import { FlowField, DensityContours } from "./FlowField";
 import { EarthMarker } from "./EarthMarker";
 import { ScaleGrid } from "./ScaleGrid";
+import { ClusterMarkers } from "./ClusterMarkers";
 
-const SCALE = 1 / 1000; // 1 Mpc = 0.001 world units (3000 Mpc = 3 units)
+const SCALE = 1 / 1000; // 1 Mpc = 0.001 world units
 
 function detectWebGL(): boolean {
   try {
@@ -22,13 +23,14 @@ function detectWebGL(): boolean {
   }
 }
 
-interface Galaxy {
-  x: number; y: number; z: number;
-  density: number; redshift: number; dataset: string;
-}
 interface FlowCell {
   x: number; y: number; z: number;
   density: number; vx: number; vy: number; vz: number;
+}
+interface Cluster {
+  x: number; y: number; z: number;
+  density: number;
+  estimatedCount: number;
 }
 interface Layers {
   galaxies: boolean; flowField: boolean; densityContours: boolean;
@@ -38,6 +40,7 @@ interface Layers {
 interface Props {
   galaxies: Galaxy[];
   flowCells: FlowCell[];
+  clusters: Cluster[];
   layers: Layers;
   colorMode: "density" | "redshift" | "dataset";
   pointSize: number;
@@ -45,6 +48,10 @@ interface Props {
   playSpeed: number;
   futureOffset: number;
   onFutureOffsetChange: (v: number) => void;
+  selectedGalaxy: Galaxy | null;
+  onSelectGalaxy: (g: Galaxy | null) => void;
+  selectedCluster: Cluster | null;
+  onSelectCluster: (c: Cluster | null) => void;
 }
 
 function RotatingStarfield() {
@@ -75,6 +82,121 @@ function AnimationController({
     }
   });
   return null;
+}
+
+// Click raycaster: project ray through mouse and find nearest galaxy point or cluster
+function ClickRaycaster({ galaxies, clusters, onSelectGalaxy, onSelectCluster, SCALE }: {
+  galaxies: Galaxy[];
+  clusters: Cluster[];
+  onSelectGalaxy: (g: Galaxy | null) => void;
+  onSelectCluster: (c: Cluster | null) => void;
+  SCALE: number;
+}) {
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const mouse = useMemo(() => new THREE.Vector2(), []);
+
+  const handleClick = useCallback((event: MouseEvent) => {
+    const rect = gl.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    // First try galaxy points (larger search radius since they're small)
+    if (galaxies.length > 0) {
+      const pointGeo = new THREE.BufferGeometry();
+      const pos = new Float32Array(galaxies.length * 3);
+      for (let i = 0; i < galaxies.length; i++) {
+        pos[i * 3] = galaxies[i].x * SCALE;
+        pos[i * 3 + 1] = galaxies[i].y * SCALE;
+        pos[i * 3 + 2] = galaxies[i].z * SCALE;
+      }
+      pointGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const points = new THREE.Points(pointGeo);
+      const hits = raycaster.intersectObject(points);
+      if (hits.length > 0 && hits[0].index != null) {
+        const idx = hits[0].index;
+        if (idx >= 0 && idx < galaxies.length) {
+          onSelectGalaxy(galaxies[idx]);
+          onSelectCluster(null);
+          return;
+        }
+      }
+    }
+
+    // Then try cluster markers (spheres, easier to hit)
+    if (clusters.length > 0) {
+      const clusterGroup = new THREE.Group();
+      for (let i = 0; i < clusters.length; i++) {
+        const c = clusters[i];
+        const radius = 0.008 + Math.min(0.024, c.density * 0.004);
+        const geo = new THREE.SphereGeometry(radius, 8, 8);
+        const mat = new THREE.MeshBasicMaterial();
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(c.x * SCALE, c.y * SCALE, c.z * SCALE);
+        mesh.userData = { index: i, cluster: c };
+        clusterGroup.add(mesh);
+      }
+      const clusterHits = raycaster.intersectObjects(clusterGroup.children);
+      if (clusterHits.length > 0) {
+        const hit = clusterHits[0];
+        const c = hit.object.userData.cluster as Cluster;
+        if (c) {
+          onSelectCluster(c);
+          onSelectGalaxy(null);
+          return;
+        }
+      }
+    }
+
+    // Clicked empty space — deselect
+    onSelectGalaxy(null);
+    onSelectCluster(null);
+  }, [camera, gl, raycaster, mouse, galaxies, clusters, SCALE, onSelectGalaxy, onSelectCluster]);
+
+  useEffect(() => {
+    gl.domElement.addEventListener("click", handleClick);
+    return () => gl.domElement.removeEventListener("click", handleClick);
+  }, [gl, handleClick]);
+
+  return null;
+}
+
+// Highlight ring around selected galaxy
+function SelectedGalaxyMarker({ galaxy, SCALE }: { galaxy: Galaxy | null; SCALE: number }) {
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (ref.current) {
+      ref.current.rotation.y += 0.02;
+      ref.current.rotation.x = Math.sin(clock.getElapsedTime() * 1.2) * 0.3;
+    }
+  });
+  if (!galaxy) return null;
+  const x = galaxy.x * SCALE;
+  const y = galaxy.y * SCALE;
+  const z = galaxy.z * SCALE;
+  return (
+    <group position={[x, y, z]}>
+      <mesh ref={ref}>
+        <ringGeometry args={[0.018, 0.022, 32]} />
+        <meshBasicMaterial color="#ffc140" transparent opacity={0.7} side={THREE.DoubleSide} />
+      </mesh>
+      {/* Crosshair lines using buffer geometry to avoid JSX <line> ambiguity */}
+      <lineSegments>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            args={[new Float32Array([
+              -0.025, 0, 0,  0.025, 0, 0,
+              0, -0.025, 0,  0, 0.025, 0,
+              0, 0, -0.025,  0, 0, 0.025,
+            ]), 3]}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color="#ffc140" transparent opacity={0.5} />
+      </lineSegments>
+    </group>
+  );
 }
 
 function WebGLFallback({ count }: { count: number }) {
@@ -118,7 +240,7 @@ function WebGLFallback({ count }: { count: number }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 20, fontSize: "0.7rem", color: "rgba(100,140,200,0.5)" }}>
-          <span>H₀=70 km/s/Mpc</span><span>Ω<sub>m</sub>=0.3</span><span>Ω<sub>Λ</sub>=0.7</span><span>ΛCDM</span>
+          <span>H₀=70 km/s/Mpc</span><span>Ωₘ=0.3</span><span>Ω_Λ=0.7</span><span>ΛCDM</span>
         </div>
       </div>
     </div>
@@ -126,15 +248,19 @@ function WebGLFallback({ count }: { count: number }) {
 }
 
 export function CosmicViewer({
-  galaxies, flowCells, layers, colorMode, pointSize, isPlaying,
+  galaxies, flowCells, clusters, layers, colorMode, pointSize, isPlaying,
   playSpeed, futureOffset, onFutureOffsetChange,
+  selectedGalaxy, onSelectGalaxy, selectedCluster, onSelectCluster,
 }: Props) {
-  // Pre-check WebGL before mounting Canvas — prevents Vite error overlay
   const webglAvailable = useMemo(() => detectWebGL(), []);
 
   if (!webglAvailable) {
     return <WebGLFallback count={galaxies.length} />;
   }
+
+  const selectedClusterIndex = selectedCluster
+    ? clusters.findIndex(c => c.x === selectedCluster.x && c.y === selectedCluster.y && c.z === selectedCluster.z)
+    : -1;
 
   return (
     <div style={{ width: "100%", height: "100%", background: "#020510" }}>
@@ -150,6 +276,17 @@ export function CosmicViewer({
           isPlaying={isPlaying} playSpeed={playSpeed}
           futureOffset={futureOffset} onFutureOffsetChange={onFutureOffsetChange}
         />
+
+        {/* Global click handler for selection */}
+        {layers.galaxies && (galaxies.length > 0 || clusters.length > 0) && (
+          <ClickRaycaster
+            galaxies={galaxies}
+            clusters={clusters}
+            onSelectGalaxy={onSelectGalaxy}
+            onSelectCluster={onSelectCluster}
+            SCALE={SCALE}
+          />
+        )}
 
         <Suspense fallback={null}>
           {layers.stars && <RotatingStarfield />}
@@ -167,6 +304,17 @@ export function CosmicViewer({
             />
           )}
 
+          {/* Cluster markers */}
+          {clusters.length > 0 && (
+            <ClusterMarkers
+              clusters={clusters}
+              SCALE={SCALE}
+              selectedId={selectedClusterIndex >= 0 ? selectedClusterIndex : null}
+            />
+          )}
+
+          <SelectedGalaxyMarker galaxy={selectedGalaxy} SCALE={SCALE} />
+
           {layers.flowField && flowCells.length > 0 && (
             <FlowField cells={flowCells} SCALE={SCALE} opacity={0.55} minDensityShow={-0.3} />
           )}
@@ -176,7 +324,6 @@ export function CosmicViewer({
           )}
         </Suspense>
 
-        {/* Orbit controls — drop the typed ref to avoid @types/three vs three-stdlib mismatch */}
         <OrbitControls
           enableDamping
           dampingFactor={0.05}

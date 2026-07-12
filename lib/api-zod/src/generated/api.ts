@@ -104,3 +104,29 @@ export const GetDensityGridResponse = zod.object({
 })
 
 
+/**
+ * Returns the most overdense regions from the density grid, sorted by density contrast
+ * @summary Get top overdense regions
+ */
+export const getClustersQueryNDefault = 20;
+
+export const GetClustersQueryParams = zod.object({
+  "n": zod.coerce.number().default(getClustersQueryNDefault).describe('Number of top clusters to return')
+})
+
+export const GetClustersResponse = zod.object({
+  "clusters": zod.array(zod.object({
+  "x": zod.number().describe('Cell center X in Mpc'),
+  "y": zod.number().describe('Cell center Y in Mpc'),
+  "z": zod.number().describe('Cell center Z in Mpc'),
+  "density": zod.number().describe('Density contrast delta at this cell'),
+  "vx": zod.number(),
+  "vy": zod.number(),
+  "vz": zod.number(),
+  "estimatedCount": zod.number().describe('Estimated galaxy count in this 450 Mpc cell')
+})),
+  "totalCells": zod.number(),
+  "returned": zod.number()
+})
+
+

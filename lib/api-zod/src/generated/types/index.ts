@@ -6,6 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './cluster';
+export * from './clusterResponse';
 export * from './cosmology';
 export * from './datasetInfo';
 export * from './densityCell';
@@ -15,6 +17,7 @@ export * from './galaxy';
 export * from './galaxyResponse';
 export * from './galaxyStats';
 export * from './galaxyStatsZRange';
+export * from './getClustersParams';
 export * from './getDensityGridParams';
 export * from './getGalaxiesParams';
 export * from './healthStatus';

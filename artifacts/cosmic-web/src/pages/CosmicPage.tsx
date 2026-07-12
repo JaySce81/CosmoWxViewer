@@ -3,13 +3,18 @@ import {
   useGetGalaxies,
   useGetDensityGrid,
   useGetGalaxyStats,
+  useGetClusters,
   getGetGalaxyStatsQueryKey,
   getGetGalaxiesQueryKey,
   getGetDensityGridQueryKey,
+  getGetClustersQueryKey,
 } from "@workspace/api-client-react";
 import { CosmicViewer } from "../components/CosmicViewer";
 import { ControlPanel } from "../components/ControlPanel";
 import { Legend } from "../components/Legend";
+import { GalaxyInfoCard } from "../components/GalaxyInfoCard";
+import { ClusterInfoCard } from "../components/ClusterInfoCard";
+import type { Galaxy } from "../components/GalaxyPoints";
 
 interface Layers {
   galaxies: boolean;
@@ -35,6 +40,8 @@ export function CosmicPage() {
   const [playSpeed, setPlaySpeed] = useState(1.0);
   const [futureOffset, setFutureOffset] = useState(0);
   const [datasetFilter, setDatasetFilter] = useState("all");
+  const [selectedGalaxy, setSelectedGalaxy] = useState<Galaxy | null>(null);
+  const [selectedCluster, setSelectedCluster] = useState<{ x: number; y: number; z: number; density: number; estimatedCount: number } | null>(null);
 
   // Stats — poll every 3s while server is loading, stop once ready
   const { data: statsData } = useGetGalaxyStats({
@@ -74,6 +81,19 @@ export function CosmicPage() {
     }
   );
 
+  // Clusters — fetch top-20 once
+  const clusterParams = { n: 20 };
+  const { data: clusterData } = useGetClusters(
+    clusterParams,
+    {
+      query: {
+        queryKey: getGetClustersQueryKey(clusterParams),
+        enabled: serverReady,
+        staleTime: 300000,
+      },
+    }
+  );
+
   // Refetch galaxies when dataset filter changes
   useEffect(() => {
     if (serverReady) void refetchGalaxies();
@@ -89,6 +109,7 @@ export function CosmicPage() {
 
   const galaxies = galaxyData?.galaxies ?? [];
   const flowCells = gridData?.cells ?? [];
+  const clusters = clusterData?.clusters ?? [];
 
   useEffect(() => { document.title = "Cosmic Web Visualizer"; }, []);
 
@@ -99,6 +120,7 @@ export function CosmicPage() {
         <CosmicViewer
           galaxies={galaxies}
           flowCells={flowCells}
+          clusters={clusters}
           layers={layers}
           colorMode={colorMode}
           pointSize={pointSize}
@@ -106,6 +128,20 @@ export function CosmicPage() {
           playSpeed={playSpeed}
           futureOffset={futureOffset}
           onFutureOffsetChange={setFutureOffset}
+          selectedGalaxy={selectedGalaxy}
+          onSelectGalaxy={setSelectedGalaxy}
+          selectedCluster={selectedCluster}
+          onSelectCluster={setSelectedCluster}
+        />
+
+        {/* Info card overlay — show galaxy or cluster info */}
+        <GalaxyInfoCard
+          galaxy={selectedGalaxy}
+          onClose={() => setSelectedGalaxy(null)}
+        />
+        <ClusterInfoCard
+          cluster={selectedCluster}
+          onClose={() => setSelectedCluster(null)}
         />
       </div>
 
