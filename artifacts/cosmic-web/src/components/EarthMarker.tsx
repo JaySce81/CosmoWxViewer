@@ -2,7 +2,7 @@ import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-export function EarthMarker() {
+export function EarthMarker({ SCALE }: { SCALE: number }) {
   const glowRef = useRef<THREE.Mesh>(null);
   const ringRef = useRef<THREE.Mesh>(null);
 
@@ -20,13 +20,14 @@ export function EarthMarker() {
   const spokeGeos = useMemo(() => {
     return [0, 60, 120, 180, 240, 300].map((angle) => {
       const rad = (angle * Math.PI) / 180;
+      const spokeR = 40 * SCALE;
       const pts = [
         new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0.055 * Math.cos(rad), 0.055 * Math.sin(rad), 0),
+        new THREE.Vector3(spokeR * Math.cos(rad), spokeR * Math.sin(rad), 0),
       ];
       return new THREE.BufferGeometry().setFromPoints(pts);
     });
-  }, []);
+  }, [SCALE]);
 
   const spokeMaterial = useMemo(
     () => new THREE.LineBasicMaterial({ color: "#4da6ff", transparent: true, opacity: 0.3 }),
@@ -35,21 +36,21 @@ export function EarthMarker() {
 
   return (
     <group position={[0, 0, 0]}>
-      {/* Core — Earth */}
+      {/* Core — Earth marker */}
       <mesh>
-        <sphereGeometry args={[0.012, 32, 32]} />
+        <sphereGeometry args={[10 * SCALE, 32, 32]} />
         <meshPhongMaterial color="#1a6bff" emissive="#003399" emissiveIntensity={1.0} />
       </mesh>
 
       {/* Atmosphere glow */}
       <mesh ref={glowRef}>
-        <sphereGeometry args={[0.024, 32, 32]} />
+        <sphereGeometry args={[20 * SCALE, 32, 32]} />
         <meshPhongMaterial color="#4da6ff" transparent opacity={0.15} side={THREE.BackSide} />
       </mesh>
 
       {/* Equatorial ring */}
       <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.030, 0.033, 64]} />
+        <ringGeometry args={[30 * SCALE, 33 * SCALE, 64]} />
         <meshBasicMaterial color="#4da6ff" transparent opacity={0.5} side={THREE.DoubleSide} />
       </mesh>
 
@@ -59,7 +60,7 @@ export function EarthMarker() {
       ))}
 
       {/* Local point light */}
-      <pointLight color="#2266ff" intensity={0.6} distance={0.6} />
+      <pointLight color="#2266ff" intensity={0.6} distance={200 * SCALE} />
     </group>
   );
 }

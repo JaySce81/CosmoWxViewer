@@ -1,144 +1,260 @@
 import { Router } from "express";
 import * as fs from "fs";
-import * as readline from "readline";
 import * as path from "path";
+import * as readline from "readline";
 import { logger } from "../lib/logger";
 
 const router = Router();
 
-// ─── ΛCDM Cosmology ──────────────────────────────────────────────────────────
-const H0 = 70;             // km/s/Mpc
-const OMEGA_M = 0.3;
-const OMEGA_L = 0.7;
+// ─── Flat ΛCDM cosmology ──────────────────────────────────────────────────────
+// All positions are present-day comoving coordinates in Mpc.
+const H0 = 67.4; // km/s/Mpc
+const OMEGA_M = 0.315;
+const OMEGA_L = 0.685;
 const C_LIGHT = 299792.458; // km/s
 
-function E(z: number): number {
+function expansionRate(z: number): number {
   return Math.sqrt(OMEGA_M * Math.pow(1 + z, 3) + OMEGA_L);
 }
 
-// Pre-compute comoving distance lookup table for speed (1000-step integration)
-const Z_TABLE_N = 4000;
-const Z_TABLE_MAX = 1.6;
-const zTable: Float64Array = new Float64Array(Z_TABLE_N);
-for (let i = 0; i < Z_TABLE_N; i++) {
+// Midpoint integration avoids a redshift-bin approximation while keeping
+// per-galaxy conversion fast after startup.
+const Z_TABLE_N = 6000;
+const Z_TABLE_MAX = 3;
+const DISTANCE_TABLE = new Float64Array(Z_TABLE_N + 1);
+for (let i = 1; i <= Z_TABLE_N; i++) {
   const z = (i / Z_TABLE_N) * Z_TABLE_MAX;
-  if (z <= 0) { zTable[i] = 0; continue; }
-  const N = 1000;
-  const dz = z / N;
-  let sum = 0;
-  for (let j = 0; j < N; j++) sum += 1 / E((j + 0.5) * dz);
-  zTable[i] = (C_LIGHT / H0) * sum * dz;
+  const previousZ = ((i - 1) / Z_TABLE_N) * Z_TABLE_MAX;
+  const dz = z - previousZ;
+  const midpoint = previousZ + dz / 2;
+  DISTANCE_TABLE[i] =
+    DISTANCE_TABLE[i - 1] + (C_LIGHT / H0) * (dz / expansionRate(midpoint));
 }
 
 function comovingDistance(z: number): number {
   if (z <= 0) return 0;
-  if (z >= Z_TABLE_MAX) return zTable[Z_TABLE_N - 1];
-  const idx = (z / Z_TABLE_MAX) * Z_TABLE_N;
-  const i0 = Math.floor(idx);
-  const i1 = Math.min(i0 + 1, Z_TABLE_N - 1);
-  return zTable[i0] + (idx - i0) * (zTable[i1] - zTable[i0]);
+  if (z >= Z_TABLE_MAX) return DISTANCE_TABLE[Z_TABLE_N];
+  const position = (z / Z_TABLE_MAX) * Z_TABLE_N;
+  const lower = Math.floor(position);
+  const fraction = position - lower;
+  return DISTANCE_TABLE[lower] +
+    fraction * (DISTANCE_TABLE[lower + 1] - DISTANCE_TABLE[lower]);
 }
 
-// ─── Dataset Definitions ─────────────────────────────────────────────────────
+// Relativistic radial velocity corresponding to the measured spectroscopic
+// redshift. It is the only velocity available in the attached DESI files.
+function radialVelocityFromRedshift(z: number): number {
+  const onePlusZ = 1 + z;
+  return C_LIGHT * ((onePlusZ * onePlusZ - 1) / (onePlusZ * onePlusZ + 1));
+}
+
+// ─── Dataset discovery ────────────────────────────────────────────────────────
 const workspaceRoot = process.cwd().endsWith(path.join("artifacts", "api-server"))
   ? path.resolve(process.cwd(), "../..")
   : process.cwd();
 const DATA_DIR = path.resolve(workspaceRoot, "attached_assets");
 
-const DATASETS = [
-  { name: "lrg60",  file: "Desielg60-70_1781560104885.csv",  zMin: 0.60, zMax: 0.70, label: "DESI LRG z=0.6–0.7" },
-  { name: "lrg70",  file: "Desielg70-80_1781560104877.csv",  zMin: 0.70, zMax: 0.80, label: "DESI LRG z=0.7–0.8" },
-  { name: "lrg80",  file: "Desielg80-90_1781560104869.csv",  zMin: 0.80, zMax: 0.90, label: "DESI LRG z=0.8–0.9" },
-  { name: "lrg90",  file: "Desielg90-100_1781560104860.csv", zMin: 0.90, zMax: 1.00, label: "DESI LRG z=0.9–1.0" },
-  { name: "lrg100", file: "Desielg100-110_1781560104894.csv",zMin: 1.00, zMax: 1.10, label: "DESI LRG z=1.0–1.1" },
-  { name: "lrg2",   file: "Desilrg2_1781560104852.csv",      zMin: 0.75, zMax: 1.10, label: "DESI LRG2 z=0.75–1.1" },
-];
+type DatasetClass = "ELG" | "BGS" | "LRG" | "SPARC";
 
-// ─── Galaxy Record (internal) ─────────────────────────────────────────────────
-interface GalaxyRaw {
-  ra: number;    // degrees [0, 360)
-  dec: number;   // degrees [-90, 90]
-  z: number;     // spectroscopic redshift
-  x: number;     // comoving Mpc
-  y: number;
-  zc: number;    // z-axis (comoving Mpc) — named "zc" to avoid clash with redshift z
-  dist: number;  // comoving distance Mpc
-  dataset: string;
-  density: number; // δ = ρ/ρ̄ − 1, pre-computed at load time
+interface DatasetDefinition {
+  name: string;
+  file: string;
+  datasetClass: DatasetClass;
+  zMin: number;
+  zMax: number;
+  label: string;
+  diameterKpc: number;
 }
 
-// ─── State ────────────────────────────────────────────────────────────────────
-const galaxyStore: Map<string, GalaxyRaw[]> = new Map();
+function classFromFilename(file: string): DatasetClass | null {
+  const lower = file.toLowerCase();
+  if (lower.includes("sparc")) return "SPARC";
+  if (lower.includes("elg")) return "ELG";
+  if (lower.includes("bgs")) return "BGS";
+  if (lower.includes("lrg")) return "LRG";
+  return null;
+}
+
+function typicalDiameterKpc(datasetClass: DatasetClass): number {
+  // These are display-size fallbacks only. A catalog diameter, when present,
+  // always replaces them. They are marked as typical in every API record.
+  switch (datasetClass) {
+    case "ELG": return 12;
+    case "BGS": return 20;
+    case "SPARC": return 18;
+    case "LRG": return 30;
+  }
+}
+
+function inferRedshiftRange(file: string): { min: number; max: number } {
+  const match = file.match(/(?:elg|lrg|bgs)[_-]?(\d{2,3})[-_](\d{2,3})/i);
+  if (match) {
+    const min = Number(match[1]) / 100;
+    const max = Number(match[2]) / 100;
+    return { min, max };
+  }
+  return { min: 0, max: 3 };
+}
+
+function discoverDatasets(): DatasetDefinition[] {
+  if (!fs.existsSync(DATA_DIR)) return [];
+  const files = fs.readdirSync(DATA_DIR)
+    .filter(file => file.toLowerCase().endsWith(".csv"))
+    .map(file => ({ file, datasetClass: classFromFilename(file) }))
+    .filter((entry): entry is { file: string; datasetClass: DatasetClass } => entry.datasetClass !== null);
+
+  return files.sort((a, b) => a.file.localeCompare(b.file)).map(({ file, datasetClass }) => {
+    const range = inferRedshiftRange(file);
+    const stem = file.replace(/\.csv$/i, "").toLowerCase();
+    const rangeLabel = range.max > range.min ? ` z=${range.min.toFixed(2)}–${range.max.toFixed(2)}` : "";
+    return {
+      name: `${datasetClass.toLowerCase()}-${stem}`,
+      file,
+      datasetClass,
+      zMin: range.min,
+      zMax: range.max,
+      label: `${datasetClass}${rangeLabel}`,
+      diameterKpc: typicalDiameterKpc(datasetClass),
+    };
+  });
+}
+
+const DATASETS = discoverDatasets();
+
+// ─── Galaxy record ─────────────────────────────────────────────────────────────
+interface GalaxyRecord {
+  ra: number;
+  dec: number;
+  redshift: number;
+  distance: number;
+  scaleFactor: number;
+  physicalDistanceAtEmissionMpc: number;
+  x: number;
+  y: number;
+  z: number;
+  dataset: string;
+  datasetClass: DatasetClass;
+  diameterKpc: number;
+  diameterSource: "catalog" | "typical-class-range";
+  rotationSpeedKms: number | null;
+  rotationDirection: "CW" | "CCW" | null;
+  lineOfSightVelocityKms: number;
+  transverseVelocityKms: number | null;
+  vx: number;
+  vy: number;
+  vz: number;
+  speedKms: number;
+  velocitySource: "spectroscopic-redshift";
+}
+
+const galaxyStore = new Map<string, GalaxyRecord[]>();
 let totalLoaded = 0;
 let storeReady = false;
 
-interface FlowCell {
-  x: number; y: number; z: number;
-  density: number;
-  vx: number; vy: number; vz: number;
+function headerIndexes(headers: string[]) {
+  const normalized = headers.map(header => header.trim().toLowerCase());
+  const find = (...names: string[]) => {
+    for (const name of names) {
+      const index = normalized.indexOf(name);
+      if (index >= 0) return index;
+    }
+    return -1;
+  };
+  return {
+    ra: find("ra", "right_ascension"),
+    dec: find("dec", "declination"),
+    redshift: find("z", "redshift"),
+    diameterKpc: find("diameter_kpc", "diameter", "size_kpc"),
+    rotationSpeedKms: find("rotation_speed_kms", "vflat", "vmax", "vrot"),
+    rotationDirection: find("rotation_direction", "spin_direction", "handedness"),
+    transverseVelocityKms: find("transverse_velocity_kms", "vtrans", "proper_motion_velocity"),
+  };
 }
-interface DensityGridResult {
-  cells: FlowCell[];
-  resolution: number;
-  bounds: { min: number; max: number };
+
+function parseOptionalNumber(value: string | undefined): number | null {
+  if (value == null || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
-let densityGridCache: DensityGridResult | null = null;
 
-// Flow grid constants used by both density builder and cluster endpoint
-const FLOW_RES = 16; // coarse grid resolution
+function parseRotationDirection(value: string | undefined): "CW" | "CCW" | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "cw" || normalized === "clockwise") return "CW";
+  if (normalized === "ccw" || normalized === "counterclockwise" || normalized === "counter-clockwise") return "CCW";
+  return null;
+}
 
-// ─── CSV Parsing ──────────────────────────────────────────────────────────────
-async function parseCSV(filePath: string, datasetName: string): Promise<GalaxyRaw[]> {
+async function parseDataset(dataset: DatasetDefinition): Promise<GalaxyRecord[]> {
+  const filePath = path.join(DATA_DIR, dataset.file);
   return new Promise((resolve, reject) => {
-    const results: GalaxyRaw[] = [];
+    const results: GalaxyRecord[] = [];
     if (!fs.existsSync(filePath)) {
       logger.warn({ filePath }, "Dataset file not found, skipping");
-      resolve([]);
+      resolve(results);
       return;
     }
 
     const stream = fs.createReadStream(filePath, { encoding: "utf8" });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    let firstLine = true;
-    let raIdx = 0, decIdx = 1, zIdx = 2;
+    let indexes: ReturnType<typeof headerIndexes> | null = null;
 
-    rl.on("line", (line) => {
+    rl.on("line", line => {
       if (!line.trim()) return;
-      if (firstLine) {
-        firstLine = false;
-        const headers = line.split(",").map(h => h.trim().toLowerCase());
-        const ri = headers.indexOf("ra");
-        const di = headers.indexOf("dec");
-        const zi = headers.indexOf("z");
-        if (ri >= 0) raIdx = ri;
-        if (di >= 0) decIdx = di;
-        if (zi >= 0) zIdx = zi;
+      if (!indexes) {
+        indexes = headerIndexes(line.split(","));
+        if (indexes.ra < 0 || indexes.dec < 0 || indexes.redshift < 0) {
+          logger.warn({ file: dataset.file }, "Dataset lacks ra/dec/redshift columns, skipping");
+          rl.close();
+        }
         return;
       }
 
       const parts = line.split(",");
-      if (parts.length <= Math.max(raIdx, decIdx, zIdx)) return;
+      const ra = Number(parts[indexes.ra]);
+      const dec = Number(parts[indexes.dec]);
+      const redshift = Number(parts[indexes.redshift]);
+      if (!Number.isFinite(ra) || !Number.isFinite(dec) || !Number.isFinite(redshift) || redshift < 0 || redshift > Z_TABLE_MAX) return;
 
-      const ra = parseFloat(parts[raIdx]);
-      const dec = parseFloat(parts[decIdx]);
-      const z = parseFloat(parts[zIdx]);
-
-      if (!isFinite(ra) || !isFinite(dec) || !isFinite(z)) return;
-      if (z <= 0.01 || z > 1.5) return;
-
-      const dist = comovingDistance(z);
-      const raRad = (ra * Math.PI) / 180;
-      const decRad = (dec * Math.PI) / 180;
-      const cosDec = Math.cos(decRad);
+      const distance = comovingDistance(redshift);
+      const scaleFactor = 1 / (1 + redshift);
+      const raRadians = (ra * Math.PI) / 180;
+      const decRadians = (dec * Math.PI) / 180;
+      const direction = [
+        Math.cos(decRadians) * Math.cos(raRadians),
+        Math.cos(decRadians) * Math.sin(raRadians),
+        Math.sin(decRadians),
+      ];
+      const lineOfSightVelocityKms = radialVelocityFromRedshift(redshift);
+      const diameterFromCatalog = parseOptionalNumber(parts[indexes.diameterKpc]);
+      const rotationSpeedKms = parseOptionalNumber(parts[indexes.rotationSpeedKms]);
+      const transverseVelocityKms = parseOptionalNumber(parts[indexes.transverseVelocityKms]);
+      const radialVector = direction.map(component => component * lineOfSightVelocityKms);
+      const transverseSpeed = transverseVelocityKms ?? 0;
 
       results.push({
-        ra, dec, z,
-        x: dist * cosDec * Math.cos(raRad),
-        y: dist * cosDec * Math.sin(raRad),
-        zc: dist * Math.sin(decRad),
-        dist,
-        dataset: datasetName,
-        density: 0, // filled in during pre-annotation
+        ra,
+        dec,
+        redshift,
+        distance,
+        scaleFactor,
+        physicalDistanceAtEmissionMpc: distance * scaleFactor,
+        x: distance * direction[0],
+        y: distance * direction[1],
+        z: distance * direction[2],
+        dataset: dataset.name,
+        datasetClass: dataset.datasetClass,
+        diameterKpc: diameterFromCatalog ?? dataset.diameterKpc,
+        diameterSource: diameterFromCatalog == null ? "typical-class-range" : "catalog",
+        rotationSpeedKms,
+        rotationDirection: parseRotationDirection(parts[indexes.rotationDirection]),
+        lineOfSightVelocityKms,
+        transverseVelocityKms,
+        vx: radialVector[0],
+        vy: radialVector[1],
+        vz: radialVector[2],
+        speedKms: Math.sqrt(lineOfSightVelocityKms ** 2 + transverseSpeed ** 2),
+        velocitySource: "spectroscopic-redshift",
       });
     });
 
@@ -147,227 +263,94 @@ async function parseCSV(filePath: string, datasetName: string): Promise<GalaxyRa
   });
 }
 
-// ─── Density Grid + Pre-annotation ───────────────────────────────────────────
-const GRID_RES = 64;
-const BOUNDS = 3600; // Mpc — covers z≈1.15
-
-function buildDensityAndAnnotate(allGalaxies: GalaxyRaw[]): DensityGridResult {
-  const CELL_SIZE = (BOUNDS * 2) / GRID_RES;
-  const GRID_VOL = GRID_RES * GRID_RES * GRID_RES;
-  const counts = new Float32Array(GRID_VOL);
-
-  const cellOf = (v: number) =>
-    Math.max(0, Math.min(GRID_RES - 1, Math.floor((v + BOUNDS) / CELL_SIZE)));
-  const idx3 = (ix: number, iy: number, iz: number) =>
-    ix * GRID_RES * GRID_RES + iy * GRID_RES + iz;
-
-  // Count galaxies per cell
-  for (const g of allGalaxies) {
-    const ix = cellOf(g.x);
-    const iy = cellOf(g.y);
-    const iz = cellOf(g.zc);
-    counts[idx3(ix, iy, iz)]++;
-  }
-
-  // Compute mean count over occupied cells
-  let occupied = 0, total = 0;
-  for (let i = 0; i < GRID_VOL; i++) {
-    if (counts[i] > 0) { occupied++; total += counts[i]; }
-  }
-  const meanCount = occupied > 0 ? total / occupied : 1;
-
-  // Pre-annotate EVERY galaxy with its local density δ = count/mean − 1
-  logger.info({ galaxies: allGalaxies.length, meanCount: meanCount.toFixed(2) }, "Pre-annotating galaxy densities");
-  for (const g of allGalaxies) {
-    const ix = cellOf(g.x);
-    const iy = cellOf(g.y);
-    const iz = cellOf(g.zc);
-    g.density = counts[idx3(ix, iy, iz)] / meanCount - 1;
-  }
-
-  // Build coarser flow-field grid via density gradient
-  const flowStep = GRID_RES / FLOW_RES;
-  const cells: FlowCell[] = [];
-
-  for (let fi = 0; fi < FLOW_RES; fi++) {
-    for (let fj = 0; fj < FLOW_RES; fj++) {
-      for (let fk = 0; fk < FLOW_RES; fk++) {
-        const i = Math.round(fi * flowStep + flowStep / 2);
-        const j = Math.round(fj * flowStep + flowStep / 2);
-        const k = Math.round(fk * flowStep + flowStep / 2);
-        const ci = Math.min(i, GRID_RES - 1);
-        const cj = Math.min(j, GRID_RES - 1);
-        const ck = Math.min(k, GRID_RES - 1);
-
-        const cnt = counts[idx3(ci, cj, ck)];
-        const delta = cnt / meanCount - 1;
-
-        // Central difference gradient — flow toward overdense regions
-        const ip = Math.min(ci + 1, GRID_RES - 1);
-        const im = Math.max(ci - 1, 0);
-        const jp = Math.min(cj + 1, GRID_RES - 1);
-        const jm = Math.max(cj - 1, 0);
-        const kp = Math.min(ck + 1, GRID_RES - 1);
-        const km = Math.max(ck - 1, 0);
-
-        const gx = (counts[idx3(ip, cj, ck)] - counts[idx3(im, cj, ck)]) / (2 * meanCount);
-        const gy = (counts[idx3(ci, jp, ck)] - counts[idx3(ci, jm, ck)]) / (2 * meanCount);
-        const gz = (counts[idx3(ci, cj, kp)] - counts[idx3(ci, cj, km)]) / (2 * meanCount);
-
-        // World-space center of this flow cell
-        const wx = (ci + 0.5) * CELL_SIZE - BOUNDS;
-        const wy = (cj + 0.5) * CELL_SIZE - BOUNDS;
-        const wz = (ck + 0.5) * CELL_SIZE - BOUNDS;
-
-        cells.push({ x: wx, y: wy, z: wz, density: delta, vx: gx, vy: gy, vz: gz });
-      }
-    }
-  }
-
-  return { cells, resolution: FLOW_RES, bounds: { min: -BOUNDS, max: BOUNDS } };
-}
-
-// ─── Data Loading ────────────────────────────────────────────────────────────
 async function loadAllData() {
-  logger.info("Loading galaxy datasets…");
-  for (const ds of DATASETS) {
-    const filePath = path.join(DATA_DIR, ds.file);
+  logger.info({ datasets: DATASETS.length }, "Loading DESI and SPARC datasets");
+  for (const dataset of DATASETS) {
     try {
-      const galaxies = await parseCSV(filePath, ds.name);
-      galaxyStore.set(ds.name, galaxies);
-      totalLoaded += galaxies.length;
-      logger.info({ dataset: ds.name, count: galaxies.length }, "Dataset loaded");
-    } catch (err) {
-      logger.error({ err, dataset: ds.name }, "Failed to load dataset");
-      galaxyStore.set(ds.name, []);
+      const records = await parseDataset(dataset);
+      galaxyStore.set(dataset.name, records);
+      totalLoaded += records.length;
+      logger.info({ dataset: dataset.name, class: dataset.datasetClass, count: records.length }, "Dataset loaded");
+    } catch (error) {
+      logger.error({ error, dataset: dataset.name }, "Failed to load dataset");
+      galaxyStore.set(dataset.name, []);
     }
   }
-
-  logger.info({ totalLoaded }, "All datasets loaded — building density grid & annotating…");
-
-  const allGalaxies: GalaxyRaw[] = [];
-  for (const galaxies of galaxyStore.values()) {
-    for (const g of galaxies) allGalaxies.push(g);
-  }
-
-  try {
-    densityGridCache = buildDensityAndAnnotate(allGalaxies);
-    logger.info({ flowCells: densityGridCache.cells.length }, "Density grid built, all galaxies annotated");
-  } catch (err) {
-    logger.error({ err }, "Failed to build density grid");
-    densityGridCache = { cells: [], resolution: 16, bounds: { min: -BOUNDS, max: BOUNDS } };
-  }
-
   storeReady = true;
+  logger.info({ totalLoaded }, "All catalog datasets loaded");
 }
 
-loadAllData().catch(err => logger.error({ err }, "Fatal: failed to load galaxy data"));
+void loadAllData().catch(error => logger.error({ error }, "Fatal: failed to load galaxy data"));
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
-
-// GET /api/galaxies
 router.get("/galaxies", (req, res) => {
   if (!storeReady) {
     res.status(503).json({ error: "Data loading, please try again shortly" });
     return;
   }
 
-  const sampleSize = Math.min(parseInt(String(req.query.sample ?? "80000"), 10), 300000);
-  const zmin = parseFloat(String(req.query.zmin ?? "0"));
-  const zmax = parseFloat(String(req.query.zmax ?? "1.5"));
+  const sampleSize = Math.min(Math.max(parseInt(String(req.query.sample ?? "80000"), 10) || 80000, 1), 300000);
+  const zmin = Number.isFinite(Number(req.query.zmin)) ? Number(req.query.zmin) : 0;
+  const zmax = Number.isFinite(Number(req.query.zmax)) ? Number(req.query.zmax) : Z_TABLE_MAX;
   const datasetFilter = String(req.query.dataset ?? "all");
+  const pool: GalaxyRecord[] = [];
 
-  // Collect matching galaxies
-  const pool: GalaxyRaw[] = [];
-  for (const [name, galaxies] of galaxyStore.entries()) {
+  for (const [name, records] of galaxyStore) {
     if (datasetFilter !== "all" && name !== datasetFilter) continue;
-    for (const g of galaxies) {
-      if (g.z >= zmin && g.z <= zmax) pool.push(g);
+    for (const galaxy of records) {
+      if (galaxy.redshift >= zmin && galaxy.redshift <= zmax) pool.push(galaxy);
     }
   }
 
-  const total = pool.length;
-
-  // Uniform-stride spatial sampling
-  let sampled: GalaxyRaw[];
-  if (total <= sampleSize) {
-    sampled = pool;
-  } else {
-    const step = total / sampleSize;
-    sampled = [];
-    for (let i = 0; i < sampleSize; i++) {
-      sampled.push(pool[Math.floor(i * step)]);
-    }
+  const sampled: GalaxyRecord[] = [];
+  const step = pool.length > sampleSize ? pool.length / sampleSize : 1;
+  for (let i = 0; i < pool.length && sampled.length < sampleSize; i += step) {
+    sampled.push(pool[Math.floor(i)]);
   }
 
   res.json({
-    galaxies: sampled.map(g => ({
-      x: g.x,
-      y: g.y,
-      z: g.zc,
-      ra: g.ra,
-      dec: g.dec,
-      redshift: g.z,
-      distance: g.dist,
-      density: g.density,  // pre-cached — accurate from full 3M galaxy count
-      dataset: g.dataset,
-    })),
-    total,
+    galaxies: sampled,
+    total: pool.length,
     returned: sampled.length,
-    cosmology: { H0, OmegaM: OMEGA_M, OmegaL: OMEGA_L },
+    cosmology: { H0, OmegaM: OMEGA_M, OmegaL: OMEGA_L, C_LIGHT },
+    dataAvailability: {
+      rotation: sampled.some(galaxy => galaxy.rotationSpeedKms != null),
+      transverseMotion: sampled.some(galaxy => galaxy.transverseVelocityKms != null),
+      diameter: sampled.some(galaxy => galaxy.diameterSource === "catalog"),
+    },
   });
 });
 
-// GET /api/galaxies/stats
 router.get("/galaxies/stats", (_req, res) => {
-  const datasets = DATASETS.map(ds => ({
-    name: ds.name,
-    count: galaxyStore.get(ds.name)?.length ?? 0,
-    zMin: ds.zMin,
-    zMax: ds.zMax,
-    label: ds.label,
-  }));
-
-  res.json({
-    datasets,
-    totalGalaxies: totalLoaded,
-    zRange: { min: 0.6, max: 1.1 },
-    ready: storeReady,
-  });
-});
-
-// GET /api/density-grid
-router.get("/density-grid", (_req, res) => {
-  if (!storeReady || !densityGridCache) {
-    res.status(503).json({ error: "Data not ready" });
-    return;
+  let minimumRedshift = Number.POSITIVE_INFINITY;
+  let maximumRedshift = Number.NEGATIVE_INFINITY;
+  for (const records of galaxyStore.values()) {
+    for (const record of records) {
+      if (record.redshift < minimumRedshift) minimumRedshift = record.redshift;
+      if (record.redshift > maximumRedshift) maximumRedshift = record.redshift;
+    }
   }
-  res.json(densityGridCache);
-});
-
-// GET /api/clusters — top-N overdense regions from the flow field
-router.get("/clusters", (req, res) => {
-  if (!storeReady || !densityGridCache) {
-    res.status(503).json({ error: "Data not ready" });
-    return;
-  }
-  const n = Math.min(parseInt(String(req.query.n ?? "20"), 10), 100);
-  // Sort by density descending and take top N
-  const sorted = [...densityGridCache.cells].sort((a, b) => b.density - a.density);
-  const top = sorted.slice(0, n);
-
   res.json({
-    clusters: top.map(c => ({
-      x: c.x, y: c.y, z: c.z,
-      density: c.density,
-      vx: c.vx, vy: c.vy, vz: c.vz,
-      // Estimate galaxy count in this cell: density tells us n/n_mean. Mean galaxies
-      // per 450 Mpc cell = totalLoaded / (16^3) ≈ 3000000 / 4096 ≈ 732.
-      // n = n_mean × (1 + δ), so estimated count ≈ 732 × (1 + δ)
-      estimatedCount: Math.round((totalLoaded / (FLOW_RES * FLOW_RES * FLOW_RES)) * (1 + c.density)),
+    datasets: DATASETS.map(dataset => ({
+      name: dataset.name,
+      count: galaxyStore.get(dataset.name)?.length ?? 0,
+      datasetClass: dataset.datasetClass,
+      zMin: dataset.zMin,
+      zMax: dataset.zMax,
+      label: dataset.label,
     })),
-    totalCells: densityGridCache.cells.length,
-    returned: top.length,
+    totalGalaxies: totalLoaded,
+    zRange: {
+      min: Number.isFinite(minimumRedshift) ? minimumRedshift : 0,
+      max: Number.isFinite(maximumRedshift) ? maximumRedshift : 0,
+    },
+    cosmology: { H0, OmegaM: OMEGA_M, OmegaL: OMEGA_L },
+    availableMeasurements: {
+      rotationSpeed: [...galaxyStore.values()].some(records => records.some(g => g.rotationSpeedKms != null)),
+      rotationDirection: [...galaxyStore.values()].some(records => records.some(g => g.rotationDirection != null)),
+      transverseMotion: [...galaxyStore.values()].some(records => records.some(g => g.transverseVelocityKms != null)),
+      catalogDiameter: [...galaxyStore.values()].some(records => records.some(g => g.diameterSource === "catalog")),
+    },
+    ready: storeReady,
   });
 });
 

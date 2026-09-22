@@ -1,6 +1,6 @@
-# Cosmic Web Visualizer
+# Cosmic Universe Model
 
-A scientifically accurate 3D cosmological visualization showing ~3 million DESI survey galaxies positioned from Earth using real RA/Dec/redshift data, with Saffir-Simpson-inspired density color coding, velocity flow overlays, galaxy futurecast animation, and full zoom/pan/rotate navigation.
+A catalog-driven 3D cosmological visualization showing the supplied DESI and SPARC records in true comoving space. Each record is positioned from its own RA/Dec/redshift, sized from a catalog diameter or documented class fallback, and colored by the selected measured motion or rotation field.
 
 ## Run & Operate
 
@@ -20,34 +20,34 @@ A scientifically accurate 3D cosmological visualization showing ~3 million DESI 
 
 ## Where things live
 
-- `attached_assets/` — 6 DESI LRG CSV files (~500k galaxies each, ~3M total)
-- `artifacts/api-server/src/routes/galaxies.ts` — galaxy data loading, coordinate conversion, density grid
+- `attached_assets/` — supplied DESI/SPARC catalog files
+- `artifacts/api-server/src/routes/galaxies.ts` — catalog discovery, ΛCDM distance conversion, and per-record motion fields
 - `artifacts/cosmic-web/src/components/CosmicViewer.tsx` — Three.js/R3F 3D canvas
 - `artifacts/cosmic-web/src/components/GalaxyPoints.tsx` — 80k-galaxy point cloud renderer
-- `artifacts/cosmic-web/src/components/FlowField.tsx` — velocity flow overlay (like UW steering charts)
-- `artifacts/cosmic-web/src/lib/cosmicColors.ts` — Saffir-Simpson density color scale
+- `artifacts/cosmic-web/src/components/FlowField.tsx` — per-galaxy motion-vector overlay
+- `artifacts/cosmic-web/src/lib/cosmicColors.ts` — dataset-class colors
 - `lib/api-spec/openapi.yaml` — API contract (source of truth)
 
 ## Architecture decisions
 
-- **No database**: All 3M galaxies are loaded into memory at server startup from CSV files (~8s cold start), then sampled per-request. No DB needed for read-only astronomical data.
-- **Coordinate conversion on server**: RA/Dec/z → Cartesian Mpc via ΛCDM comoving distance (H0=70, Ω_m=0.3, Ω_Λ=0.7) with 1000-step numerical integration, pre-computed via lookup table.
-- **Density grid**: 48³ spatial bins over ±3500 Mpc, density contrast δ = n/n̄ - 1. 16³ flow field coarsened for rendering performance.
-- **Saffir-Simpson color scale**: Voids (high pressure) = light blue → Superclusters (Cat 5) = red, matching hurricane analogy.
-- **Scale**: 1 Three.js world unit = 1000 Mpc. Galaxy render range ≈ z=0.6–1.1 (1730–3100 Mpc).
+- **No database**: Catalog records are loaded into memory at server startup, then sampled per request.
+- **Coordinate conversion on server**: Each RA/Dec/redshift record is independently converted to Cartesian comoving Mpc using flat ΛCDM with H₀=67.4, Ωₘ=0.315, ΩΛ=0.685 and midpoint numerical integration.
+- **Motion**: The supplied spectroscopic redshift is converted to an individual relativistic line-of-sight velocity and projected into a radial 3-D vector. Transverse and rotation fields remain null when absent from the source catalog.
+- **Physical size**: Catalog diameters are used when present; otherwise the API marks a class-specific typical diameter fallback so the UI never presents it as a measurement.
+- **Scale**: 1 Three.js world unit = 1 Mpc (true physical scale). Camera far plane and zoom limits are updated to cover the full 3000+ Mpc volume with a Stellarium-like zoom/pan experience.
 - **WebGL detection**: Pre-checks GPU availability before mounting Canvas to avoid Vite error overlay in no-GPU environments.
 
 ## Product
 
-- Full-screen 3D cosmic web visualization with Earth at center
-- 80k galaxy point cloud (sampled from 3M) colored by local density, redshift, or dataset
-- Saffir-Simpson density scale: void=High pressure, filaments=Cat 3, clusters=Cat 5
-- Velocity flow overlay (density-gradient-driven, like UW tropical weather steering charts)
-- Density field contour overlay
-- Futurecast animation: advance galaxy positions along flow field vectors
-- Layer controls: galaxies, flow field, density contours, scale grid, starfield, Earth marker
-- Dataset filter: individual z-bin DESI slices or all combined
-- Color modes: by density, redshift, or dataset membership
+- Full-screen 3D catalog visualization with Earth at the observer origin
+- 80k-record point cloud sampled from the available catalogs without shell flattening
+- Dot size tied to physical diameter data or an explicit typical class fallback
+- Color modes for rotation speed, rotation direction, line-of-sight velocity, transverse motion, and dataset class
+- Per-record motion vectors using only available spectroscopic velocities
+- Motion preview: advance records using 1 km/s × 1 Gyr ≈ 1.022 Mpc
+- Dynamic HUD scale bar that updates with camera zoom
+- Layer controls: galaxies, motion vectors, comoving grid, starfield, Earth marker
+- Dataset filter: discovered ELG, BGS, LRG, and SPARC catalog files
 
 ## User preferences
 
@@ -55,7 +55,7 @@ _Accuracy is paramount. Multi-session effort expected._
 
 ## Gotchas
 
-- API server takes ~8s on cold start to load all 3M galaxies; `/galaxies/stats` returns `ready: false` until done
+- API server loads catalog files on cold start; `/galaxies/stats` returns `ready: false` until done
 - `allGalaxies.push(...g)` with 500k elements causes stack overflow — must use a for loop
 - WebGL requires GPU; Replit's preview iframe has no GPU. Use deploy or open in GPU browser tab to see 3D
 - Never import `@workspace/db` in api-server; no database is provisioned for this project

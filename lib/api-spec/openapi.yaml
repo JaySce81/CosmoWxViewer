@@ -1,9 +1,8 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: Cosmic Web Visualization API
+  description: DESI and SPARC universe visualization API
 servers:
   - url: /api
     description: Base API path
@@ -11,14 +10,13 @@ tags:
   - name: health
     description: Health operations
   - name: cosmos
-    description: Cosmological data endpoints
+    description: Catalog-based cosmological data
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -26,142 +24,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
-
   /galaxies:
     get:
       operationId: getGalaxies
       tags: [cosmos]
-      summary: Get galaxy data
-      description: Returns spatially sampled galaxy positions and metadata
+      summary: Get galaxies in true comoving space
+      description: Returns individually sampled DESI or SPARC catalog records positioned with flat ΛCDM comoving distances. No redshift-shell coordinates are used.
       parameters:
         - name: sample
           in: query
           schema:
             type: integer
             default: 80000
-          description: Max number of galaxies to return
+            minimum: 1
+            maximum: 300000
+          description: Maximum number of catalog records to return
         - name: zmin
           in: query
           schema:
             type: number
-            default: 0.0
-          description: Minimum redshift
+            default: 0
+          description: Inclusive minimum measured redshift
         - name: zmax
           in: query
           schema:
             type: number
-            default: 1.2
-          description: Maximum redshift
+            default: 3
+          description: Inclusive maximum measured redshift
         - name: dataset
           in: query
           schema:
             type: string
             default: all
-          description: Dataset filter (all, lrg60, lrg70, lrg80, lrg90, lrg100, lrg2)
+          description: Exact discovered dataset name, or all
       responses:
         "200":
-          description: Galaxy data
+          description: Galaxy records
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GalaxyResponse"
-
+        "503":
+          description: Catalogs are still loading
   /galaxies/stats:
     get:
       operationId: getGalaxyStats
       tags: [cosmos]
-      summary: Get dataset statistics
-      description: Returns counts and metadata about available galaxy datasets
+      summary: Get catalog statistics and measurement availability
       responses:
         "200":
-          description: Dataset statistics
+          description: Catalog statistics
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GalaxyStats"
-
-  /density-grid:
-    get:
-      operationId: getDensityGrid
-      tags: [cosmos]
-      summary: Get density grid
-      description: Returns a precomputed 3D density grid for the flow overlay
-      parameters:
-        - name: resolution
-          in: query
-          schema:
-            type: integer
-            default: 32
-          description: Grid resolution per axis
-      responses:
-        "200":
-          description: Density grid data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DensityGrid"
-
-  /clusters:
-    get:
-      operationId: getClusters
-      tags: [cosmos]
-      summary: Get top overdense regions
-      description: Returns the most overdense regions from the density grid, sorted by density contrast
-      parameters:
-        - name: n
-          in: query
-          schema:
-            type: integer
-            default: 20
-          description: Number of top clusters to return
-      responses:
-        "200":
-          description: Cluster data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ClusterResponse"
-
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
-
+    Cosmology:
+      type: object
+      required: [H0, OmegaM, OmegaL, C_LIGHT]
+      properties:
+        H0:
+          type: number
+          description: Hubble constant in km/s/Mpc
+        OmegaM:
+          type: number
+          description: Matter density parameter
+        OmegaL:
+          type: number
+          description: Dark-energy density parameter
+        C_LIGHT:
+          type: number
+          description: Speed of light in km/s
     Galaxy:
       type: object
-      properties:
-        x:
-          type: number
-          description: Cartesian X position in Mpc (Earth at origin)
-        y:
-          type: number
-          description: Cartesian Y position in Mpc
-        z:
-          type: number
-          description: Cartesian Z position in Mpc
-        ra:
-          type: number
-          description: Right ascension in degrees
-        dec:
-          type: number
-          description: Declination in degrees
-        redshift:
-          type: number
-          description: Spectroscopic redshift
-        distance:
-          type: number
-          description: Comoving distance in Mpc
-        density:
-          type: number
-          description: Local density contrast (delta = rho/rho_mean - 1)
-        dataset:
-          type: string
-          description: Source dataset label
       required:
         - x
         - y
@@ -170,11 +112,88 @@ components:
         - dec
         - redshift
         - distance
-        - density
         - dataset
-
+        - datasetClass
+        - diameterKpc
+        - diameterSource
+        - rotationSpeedKms
+        - rotationDirection
+        - lineOfSightVelocityKms
+        - transverseVelocityKms
+        - vx
+        - vy
+        - vz
+        - speedKms
+        - velocitySource
+      properties:
+        x:
+          type: number
+          description: Equatorial Cartesian comoving X in Mpc
+        y:
+          type: number
+          description: Equatorial Cartesian comoving Y in Mpc
+        z:
+          type: number
+          description: Equatorial Cartesian comoving Z in Mpc
+        ra:
+          type: number
+          description: Right ascension in degrees
+        dec:
+          type: number
+          description: Declination in degrees
+        redshift:
+          type: number
+          description: Individually measured spectroscopic redshift
+        distance:
+          type: number
+          description: Comoving radial distance in Mpc
+        scaleFactor:
+          type: number
+          description: Scale factor at emission, a = 1/(1+z)
+        physicalDistanceAtEmissionMpc:
+          type: number
+          description: Physical radial distance at emission, a times comoving distance
+        dataset:
+          type: string
+        datasetClass:
+          type: string
+          enum: [ELG, BGS, LRG, SPARC]
+        diameterKpc:
+          type: number
+          description: Catalog diameter, or documented typical class fallback, in kpc
+        diameterSource:
+          type: string
+          enum: [catalog, typical-class-range]
+        rotationSpeedKms:
+          type: [number, "null"]
+          description: SPARC/catalog rotation speed when supplied
+        rotationDirection:
+          type: [string, "null"]
+          enum: [CW, CCW, null]
+        lineOfSightVelocityKms:
+          type: number
+          description: Relativistic radial velocity derived from this record's spectroscopic redshift
+        transverseVelocityKms:
+          type: [number, "null"]
+          description: Catalog transverse velocity when supplied
+        vx:
+          type: number
+          description: Measured radial motion vector X in km/s
+        vy:
+          type: number
+          description: Measured radial motion vector Y in km/s
+        vz:
+          type: number
+          description: Measured radial motion vector Z in km/s
+        speedKms:
+          type: number
+          description: Magnitude of available velocity components in km/s
+        velocitySource:
+          type: string
+          enum: [spectroscopic-redshift]
     GalaxyResponse:
       type: object
+      required: [galaxies, total, returned, cosmology, dataAvailability]
       properties:
         galaxies:
           type: array
@@ -182,37 +201,54 @@ components:
             $ref: "#/components/schemas/Galaxy"
         total:
           type: integer
-          description: Total galaxies in filtered set
         returned:
           type: integer
-          description: Number of galaxies returned
         cosmology:
           $ref: "#/components/schemas/Cosmology"
-      required:
-        - galaxies
-        - total
-        - returned
-        - cosmology
-
-    Cosmology:
+        dataAvailability:
+          $ref: "#/components/schemas/DataAvailability"
+    DataAvailability:
       type: object
+      required: [rotation, transverseMotion, diameter]
       properties:
-        H0:
+        rotation:
+          type: boolean
+        transverseMotion:
+          type: boolean
+        diameter:
+          type: boolean
+    DatasetInfo:
+      type: object
+      required: [name, count, datasetClass, zMin, zMax, label]
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+        datasetClass:
+          type: string
+          enum: [ELG, BGS, LRG, SPARC]
+        zMin:
           type: number
-          description: Hubble constant km/s/Mpc
-        OmegaM:
+        zMax:
           type: number
-          description: Matter density parameter
-        OmegaL:
-          type: number
-          description: Dark energy density parameter
-      required:
-        - H0
-        - OmegaM
-        - OmegaL
-
+        label:
+          type: string
+    MeasurementAvailability:
+      type: object
+      required: [rotationSpeed, rotationDirection, transverseMotion, catalogDiameter]
+      properties:
+        rotationSpeed:
+          type: boolean
+        rotationDirection:
+          type: boolean
+        transverseMotion:
+          type: boolean
+        catalogDiameter:
+          type: boolean
     GalaxyStats:
       type: object
+      required: [datasets, totalGalaxies, zRange, cosmology, availableMeasurements, ready]
       properties:
         datasets:
           type: array
@@ -222,139 +258,15 @@ components:
           type: integer
         zRange:
           type: object
+          required: [min, max]
           properties:
             min:
               type: number
             max:
               type: number
-          required:
-            - min
-            - max
+        cosmology:
+          $ref: "#/components/schemas/Cosmology"
+        availableMeasurements:
+          $ref: "#/components/schemas/MeasurementAvailability"
         ready:
           type: boolean
-          description: Whether the server has finished loading all galaxy data
-      required:
-        - datasets
-        - totalGalaxies
-        - zRange
-        - ready
-
-    DatasetInfo:
-      type: object
-      properties:
-        name:
-          type: string
-        count:
-          type: integer
-        zMin:
-          type: number
-        zMax:
-          type: number
-        label:
-          type: string
-      required:
-        - name
-        - count
-        - zMin
-        - zMax
-        - label
-
-    DensityCell:
-      type: object
-      properties:
-        x:
-          type: number
-        y:
-          type: number
-        z:
-          type: number
-        density:
-          type: number
-        vx:
-          type: number
-        vy:
-          type: number
-        vz:
-          type: number
-      required:
-        - x
-        - y
-        - z
-        - density
-        - vx
-        - vy
-        - vz
-
-    DensityGrid:
-      type: object
-      properties:
-        cells:
-          type: array
-          items:
-            $ref: "#/components/schemas/DensityCell"
-        resolution:
-          type: integer
-        bounds:
-          type: object
-          properties:
-            min:
-              type: number
-            max:
-              type: number
-          required:
-            - min
-            - max
-      required:
-        - cells
-        - resolution
-        - bounds
-
-    Cluster:
-      type: object
-      properties:
-        x:
-          type: number
-          description: Cell center X in Mpc
-        y:
-          type: number
-          description: Cell center Y in Mpc
-        z:
-          type: number
-          description: Cell center Z in Mpc
-        density:
-          type: number
-          description: Density contrast delta at this cell
-        vx:
-          type: number
-        vy:
-          type: number
-        vz:
-          type: number
-        estimatedCount:
-          type: integer
-          description: Estimated galaxy count in this 450 Mpc cell
-      required:
-        - x
-        - y
-        - z
-        - density
-        - vx
-        - vy
-        - vz
-        - estimatedCount
-
-    ClusterResponse:
-      type: object
-      properties:
-        clusters:
-          type: array
-          items:
-            $ref: "#/components/schemas/Cluster"
-        totalCells:
-          type: integer
-        returned:
-          type: integer
-      required:
-        - clusters
-        - totalCells
-        - returned

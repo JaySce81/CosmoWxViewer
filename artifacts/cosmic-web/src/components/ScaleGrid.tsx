@@ -6,7 +6,7 @@ interface Props {
 }
 
 export function ScaleGrid({ SCALE }: Props) {
-  const shellMpc = [500, 1000, 1500, 2000, 2500, 3000];
+  const shellMpc = [500, 1000, 1500, 2000, 2500, 3000, 3500];
 
   // Build all geometry objects in useMemo — avoids new objects every frame
   const { spokePrimitives, equatorMesh } = useMemo(() => {
@@ -16,7 +16,7 @@ export function ScaleGrid({ SCALE }: Props) {
     // 12 equatorial spokes
     for (let i = 0; i < 12; i++) {
       const angle = (i / 12) * Math.PI * 2;
-      const r = 3200 * SCALE;
+      const r = 4000 * SCALE;
       const pts = [
         new THREE.Vector3(0, 0, 0),
         new THREE.Vector3(r * Math.cos(angle), 0, r * Math.sin(angle)),
@@ -25,7 +25,7 @@ export function ScaleGrid({ SCALE }: Props) {
     }
 
     // 2 polar spokes
-    const poleR = 3200 * SCALE;
+    const poleR = 4000 * SCALE;
     const poleMat = new THREE.LineBasicMaterial({ color: "#0a1a4a", transparent: true, opacity: 0.15 });
     prims.push(new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, poleR, 0)]),
@@ -57,7 +57,7 @@ export function ScaleGrid({ SCALE }: Props) {
 
       {/* Equatorial ring */}
       <mesh rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[3190 * SCALE, 3200 * SCALE, 128]} />
+        <ringGeometry args={[3990 * SCALE, 4000 * SCALE, 128]} />
         <meshBasicMaterial color="#1a3a6a" transparent opacity={0.18} side={THREE.DoubleSide} />
       </mesh>
 

@@ -1,2 +1,4 @@
 - [Cosmic Web stack](cosmic-web-stack.md) — no DB; 3M galaxies in memory from CSV; WebGL pre-detect before Canvas mount
 - [Array spread stack overflow](array-spread-stackoverflow.md) — push(...largeArray) blows stack at 500k elements; use for loop
+- [Catalog universe model](catalog-universe-model.md) — keep each record independent; unavailable rotation/transverse measurements stay null
+- [True-Mpc scale](true-mpc-scale.md) — 1 Mpc/unit requires updating camera, controls, markers, grid, and HUD, not just SCALE
